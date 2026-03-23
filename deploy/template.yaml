@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: LexGenius Pipeline - Lambda Functions
+
+Globals:
+  Function:
+    Runtime: python3.11
+    CodeUri: ..
+    Environment:
+      Variables:
+        LGP_DB_BACKEND: !Ref DbBackend
+        LGP_DB_URL: !Ref DbUrl
+        LGP_LLM_PROVIDER: !Ref LlmProvider
+        LGP_LLM_API_KEY: !Ref LlmApiKey
+        LGP_FDA_API_KEY: !Ref FdaApiKey
+        LGP_PUBMED_API_KEY: !Ref PubmedApiKey
+        LGP_CONGRESS_API_KEY: !Ref CongressApiKey
+        LGP_EPA_API_KEY: !Ref EpaApiKey
+
+Parameters:
+  DbBackend:
+    Type: String
+    Default: postgresql
+    AllowedValues: [sqlite, postgresql]
+  DbUrl:
+    Type: String
+    Default: ''
+    NoEcho: true
+  LlmProvider:
+    Type: String
+    Default: anthropic
+    AllowedValues: [anthropic, openai]
+  LlmApiKey:
+    Type: String
+    NoEcho: true
+  FdaApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+  PubmedApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+  CongressApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+  EpaApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+
+Resources:
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: deploy.handlers.handler_ingestion.handler
+      Timeout: 300
+      MemorySize: 512
+      Description: Runs all data ingestion connectors and persists records to the database
+
+  DailyReportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: deploy.handlers.handler_daily_report.handler
+      Timeout: 120
+      MemorySize: 512
+      Description: Generates the daily mass tort intelligence report
+
+  InvestigateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: deploy.handlers.handler_investigation.handler
+      Timeout: 120
+      MemorySize: 512
+      Description: Runs a drug safety signal investigation pipeline
+
+Outputs:
+  IngestFunctionArn:
+    Description: ARN of the ingestion Lambda function
+    Value: !GetAtt IngestFunction.Arn
+  DailyReportFunctionArn:
+    Description: ARN of the daily report Lambda function
+    Value: !GetAtt DailyReportFunction.Arn
+  InvestigateFunctionArn:
+    Description: ARN of the investigation Lambda function
+    Value: !GetAtt InvestigateFunction.Arn

@@ -27,11 +27,15 @@ target_metadata = Base.metadata
 
 def _get_url() -> str:
     settings = get_settings()
-    if settings.db_url:
-        return settings.db_url
-    if settings.db_backend == "sqlite":
-        return f"sqlite+aiosqlite:///{settings.db_path}"
-    raise ValueError("LGP_DB_URL must be set when db_backend='postgresql'")
+    url = settings.db_url
+    if not url:
+        if settings.db_backend == "sqlite":
+            return f"sqlite+aiosqlite:///{settings.db_path}"
+        raise ValueError("LGP_DB_URL must be set when db_backend='postgresql'")
+    # Normalise legacy postgres:// scheme to postgresql+asyncpg://
+    if url.startswith("postgres://"):
+        url = "postgresql+asyncpg://" + url[len("postgres://"):]
+    return url
 
 
 def run_migrations_offline() -> None:
