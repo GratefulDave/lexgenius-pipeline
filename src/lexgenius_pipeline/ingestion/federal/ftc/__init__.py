@@ -1,8 +1,3 @@
-"""FTC (Federal Trade Commission) connector placeholder.
+from lexgenius_pipeline.ingestion.federal.ftc.enforcement import FTCEnforcementConnector
 
-This package is reserved for FTC data connectors (enforcement actions,
-consumer protection cases, competition filings, consent orders).
-
-To implement: subclass BaseConnector with connector_id = "federal.ftc.*"
-and source_tier = SourceTier.FEDERAL.
-"""
+__all__ = ["FTCEnforcementConnector"]
