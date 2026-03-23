@@ -1,8 +1,4 @@
-"""NHTSA (National Highway Traffic Safety Administration) connector placeholder.
+from lexgenius_pipeline.ingestion.federal.nhtsa.complaints import NHTSAComplaintsConnector
+from lexgenius_pipeline.ingestion.federal.nhtsa.recalls import NHTSARecallsConnector
 
-This package is reserved for NHTSA data connectors (vehicle recalls,
-safety complaints, crash data, defect investigations).
-
-To implement: subclass BaseConnector with connector_id = "federal.nhtsa.*"
-and source_tier = SourceTier.FEDERAL.
-"""
+__all__ = ["NHTSAComplaintsConnector", "NHTSARecallsConnector"]
