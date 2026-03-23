@@ -1,0 +1,9 @@
+Generate alerts from the following signal data. For each alert, provide:
+- Alert level (critical, high, medium, low)
+- Signal description
+- Supporting evidence count
+- Affected entities (drugs, companies, populations)
+- Time sensitivity
+- Recommended action
+
+Prioritize signals with strong statistical evidence and high case counts.

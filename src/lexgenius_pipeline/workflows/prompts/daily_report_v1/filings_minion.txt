@@ -1,0 +1,8 @@
+Analyze the following filing data and extract the top 5 most significant filings. For each filing, provide:
+- Title and source
+- Significance score (1-10)
+- Key legal implications
+- Relevant drugs, companies, or entities involved
+- Recommended follow-up actions
+
+Focus on filings that indicate emerging litigation risk or regulatory action.

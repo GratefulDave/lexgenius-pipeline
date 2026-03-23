@@ -1,0 +1,8 @@
+Analyze competitor advertising trends from the following data. Identify:
+- Trending drug or product categories
+- Shifts in marketing messaging
+- New market entrants or exits
+- Regulatory compliance patterns in advertising
+- Potential litigation exposure from advertising claims
+
+Provide a ranked list of trends with supporting evidence.

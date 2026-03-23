@@ -1,0 +1,8 @@
+Synthesize the following sections into an executive summary for legal intelligence professionals. The summary should:
+- Open with the 3 most critical developments of the day
+- Provide a 2-3 sentence overview of each major section (filings, alerts, ad trends)
+- Highlight cross-cutting themes or patterns
+- List top 5 recommended actions ranked by urgency
+- Close with a forward-looking paragraph on emerging risks
+
+Keep the tone professional and action-oriented. Limit to 500 words.

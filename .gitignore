@@ -1,0 +1,38 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+
+# Database
+*.db
+*.sqlite
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OMC state
+.omc/
+
+# OS
+.DS_Store
+Thumbs.db
