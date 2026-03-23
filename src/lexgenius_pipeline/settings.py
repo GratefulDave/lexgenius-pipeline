@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     epa_api_key: str = ""
     pacer_username: str = ""
     pacer_password: str = ""
+    reddit_client_id: str = ""
+    reddit_client_secret: str = ""
 
     # Logging
     log_level: str = "INFO"
