@@ -15,10 +15,14 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Any
 
+import structlog
+
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.models import IngestionQuery, NormalizedRecord, Watermark
 from lexgenius_pipeline.common.types import HealthStatus
 from lexgenius_pipeline.ingestion.state.ag_actions.base import BaseAGActionsConnector, RawPressRelease
+
+logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://ag.ny.gov"
 _PRESS_URL = f"{_BASE_URL}/press-releases"
@@ -103,12 +107,14 @@ class _NYAGParser(HTMLParser):
     @staticmethod
     def _parse_date(date_str: str) -> datetime:
         if not date_str:
+            logger.warning("ag_actions.date_fallback", reason="empty date string", state="NY")
             return datetime.now(tz=timezone.utc)
         for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%B %d, %Y", "%Y-%m-%dT%H:%M:%S"):
             try:
                 return datetime.strptime(date_str.strip()[:20], fmt).replace(tzinfo=timezone.utc)
             except ValueError:
                 continue
+        logger.warning("ag_actions.date_fallback", reason="unparseable date", date_str=date_str, state="NY")
         return datetime.now(tz=timezone.utc)
 
 

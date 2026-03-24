@@ -288,6 +288,7 @@ class BaseAGActionsConnector(BaseStateConnector):
     def _parse_rss_date(date_str: str) -> datetime:
         """Parse common RSS date formats."""
         if not date_str:
+            logger.warning("ag_actions.date_fallback", reason="empty date string")
             return datetime.now(tz=timezone.utc)
 
         # RFC 2822 (most common RSS format)
@@ -305,6 +306,7 @@ class BaseAGActionsConnector(BaseStateConnector):
             except ValueError:
                 continue
 
+        logger.warning("ag_actions.date_fallback", reason="unparseable date", date_str=date_str)
         return datetime.now(tz=timezone.utc)
 
     # ── Shared HTML scraping helpers ────────────────────────────────
@@ -346,32 +348,6 @@ class BaseAGActionsConnector(BaseStateConnector):
                 return HealthStatus.DEGRADED
             except Exception:
                 return HealthStatus.FAILED
-
-    async def _parse_html_press_releases(
-        self,
-        html: str,
-        base_url: str,
-        *,
-        title_selector: str,
-        link_selector: str,
-        date_selector: str,
-        summary_selector: str | None = None,
-        date_parser: callable | None = None,
-    ) -> list[RawPressRelease]:
-        """Parse an HTML page of press releases using BeautifulSoup.
-
-        This is a helper for scrape-based connectors. Each state provides
-        CSS selectors for extracting title, link, date, and optional summary.
-        """
-        from html.parser import HTMLParser
-
-        releases: list[RawPressRelease] = []
-
-        # Use a simple HTML parser since we may not have BeautifulSoup.
-        # For production, we rely on the html.parser stdlib module.
-        # State-specific subclasses should override _fetch_releases directly
-        # if they need more sophisticated parsing.
-        return releases
 
     # ── Generic scrape-based connector implementation ────────────────
 

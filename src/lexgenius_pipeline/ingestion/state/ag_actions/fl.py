@@ -12,10 +12,14 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from urllib.parse import urlencode
 
+import structlog
+
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.models import IngestionQuery, Watermark
 from lexgenius_pipeline.common.types import HealthStatus
 from lexgenius_pipeline.ingestion.state.ag_actions.base import BaseAGActionsConnector, RawPressRelease
+
+logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://www.myfloridalegal.com"
 
@@ -87,6 +91,7 @@ class _FLAGParser(HTMLParser):
     @staticmethod
     def _parse_date(date_str: str) -> datetime:
         if not date_str:
+            logger.warning("ag_actions.date_fallback", reason="empty date string", state="FL")
             return datetime.now(tz=timezone.utc)
         for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y", "%Y-%m-%dT%H:%M:%S"):
             try:
@@ -95,6 +100,7 @@ class _FLAGParser(HTMLParser):
                 )
             except ValueError:
                 continue
+        logger.warning("ag_actions.date_fallback", reason="unparseable date", date_str=date_str, state="FL")
         return datetime.now(tz=timezone.utc)
 
 
