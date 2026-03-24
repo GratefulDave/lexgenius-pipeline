@@ -94,7 +94,15 @@ class RedditForumsConnector(BaseConnector):
                 if resp.status_code == 401:
                     token = await self._authenticate()
                     headers["Authorization"] = f"Bearer {token}"
-                    continue
+                    try:
+                        resp = await client.get(url, headers=headers)
+                    except Exception as exc:
+                        logger.warning(
+                            "reddit_forums.retry_error",
+                            subreddit=subreddit,
+                            error=str(exc),
+                        )
+                        continue
 
                 if resp.status_code >= 400:
                     logger.warning(
