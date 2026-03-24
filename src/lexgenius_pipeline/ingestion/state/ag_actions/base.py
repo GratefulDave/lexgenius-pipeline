@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from abc import abstractmethod
+from html.parser import HTMLParser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -113,6 +114,78 @@ class RawPressRelease:
     summary: str = ""
     raw_html: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+class GenericPressReleaseParser(HTMLParser):
+    """Reusable HTML parser for state AG press release listing pages.
+
+    Accepts *link_patterns* — a list of substrings that a link's href must
+    contain to be considered a press-release link.  Extracts title from link
+    text, date from ``<time>`` elements, and summary from ``<p>`` tags that
+    follow a matched link.
+    """
+
+    def __init__(self, base_url: str, link_patterns: list[str]) -> None:
+        super().__init__()
+        self.base_url = base_url.rstrip("/")
+        self.link_patterns = [p.lower() for p in link_patterns]
+        self.releases: list[RawPressRelease] = []
+        self._current_title = ""
+        self._current_link = ""
+        self._current_date = ""
+        self._in_link = False
+        self._in_summary = False
+        self._summary_parts: list[str] = []
+
+    def _matches_link(self, href: str) -> bool:
+        href_lower = href.lower()
+        return any(p in href_lower for p in self.link_patterns)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = dict(attrs)
+        href = attrs_dict.get("href", "")
+
+        if tag == "a" and href and self._matches_link(href):
+            self._in_link = True
+            self._current_title = ""
+            self._current_date = ""
+            self._summary_parts = []
+            if href.startswith("/"):
+                href = f"{self.base_url}{href}"
+            self._current_link = href
+        elif tag == "time" and self._current_link:
+            self._current_date = attrs_dict.get("datetime", "") or attrs_dict.get("content", "")
+        elif tag == "p" and self._current_link and not self._in_link:
+            self._in_summary = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._in_link:
+            self._in_link = False
+        elif tag == "p" and self._in_summary:
+            self._in_summary = False
+            if self._current_title and self._current_link:
+                summary = " ".join(self._summary_parts).strip()
+                published_at = BaseAGActionsConnector._parse_date(self._current_date)
+                self.releases.append(
+                    RawPressRelease(
+                        title=self._current_title.strip(),
+                        url=self._current_link,
+                        published_at=published_at,
+                        summary=summary[:500],
+                        extra={"source_type": "scrape"},
+                    )
+                )
+                self._current_title = ""
+                self._current_link = ""
+
+    def handle_data(self, data: str) -> None:
+        stripped = data.strip()
+        if not stripped:
+            return
+        if self._in_link:
+            self._current_title += stripped
+        elif self._in_summary:
+            self._summary_parts.append(stripped)
 
 
 class BaseAGActionsConnector(BaseStateConnector):
@@ -350,6 +423,24 @@ class BaseAGActionsConnector(BaseStateConnector):
                 return HealthStatus.FAILED
 
     # ── Generic scrape-based connector implementation ────────────────
+
+    @staticmethod
+    def _parse_date(date_str: str, state: str = "") -> datetime:
+        """Parse common date formats with logging on fallback."""
+        if not date_str:
+            logger.warning("ag_actions.date_fallback", reason="empty date string", state=state)
+            return datetime.now(tz=timezone.utc)
+        for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y"):
+            try:
+                return datetime.strptime(date_str.strip()[:20], fmt).replace(
+                    tzinfo=timezone.utc
+                )
+            except ValueError:
+                continue
+        logger.warning(
+            "ag_actions.date_fallback", reason="unparseable date", date_str=date_str, state=state
+        )
+        return datetime.now(tz=timezone.utc)
 
     async def _scrape_releases(
         self,
