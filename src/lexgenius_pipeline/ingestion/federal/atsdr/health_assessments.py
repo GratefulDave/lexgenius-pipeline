@@ -6,11 +6,12 @@ Health assessments are key for establishing causation in toxic torts.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
 
 import structlog
 
+from lexgenius_pipeline.common.date_utils import UNKNOWN_DATE, parse_date
 from lexgenius_pipeline.common.errors import ConnectorError
+from lexgenius_pipeline.common.html_utils import LinkExtractorParser
 from lexgenius_pipeline.common.http_client import create_http_client
 from lexgenius_pipeline.common.models import IngestionQuery, NormalizedRecord, Watermark
 from lexgenius_pipeline.common.rate_limiter import AsyncRateLimiter
@@ -24,16 +25,6 @@ logger = structlog.get_logger(__name__)
 _BASE_URL = "https://www.atsdr.cdc.gov"
 
 
-def _parse_date(value: str | None) -> datetime:
-    if not value:
-        return datetime.now(tz=timezone.utc)
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y%m%d", "%B %d, %Y"):
-        try:
-            return datetime.strptime(value.strip()[:20], fmt).replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    return datetime.now(tz=timezone.utc)
-
 
 class ATSDRHealthAssessmentsConnector(BaseConnector):
     """ATSDR health assessments and toxicological profiles.
@@ -46,7 +37,7 @@ class ATSDRHealthAssessmentsConnector(BaseConnector):
     connector_id = "federal.atsdr.health_assessments"
     source_tier = SourceTier.FEDERAL
     source_label = "ATSDR Health Assessments"
-    supports_incremental = True
+    supports_incremental = False
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
@@ -73,45 +64,14 @@ class ATSDRHealthAssessmentsConnector(BaseConnector):
                     follow_redirects=True,
                 )
                 resp.raise_for_status()
-            except Exception:
-                logger.warning("atsdr_health_assessments.fetch_error", exc_info=True)
-                return []
+            except Exception as exc:
+                raise ConnectorError(
+                    f"Failed to fetch from atsdr_health_assessments: {exc}",
+                    connector_id=self.connector_id,
+                ) from exc
 
             # Parse the HTML response for assessment links
-            from html.parser import HTMLParser
-
-            class PHAParser(HTMLParser):
-                def __init__(self) -> None:
-                    super().__init__()
-                    self.links: list[dict[str, str]] = []
-                    self._current_data: list[str] = []
-                    self._in_a = False
-                    self._current_href = ""
-
-                def handle_starttag(self, tag: str, attrs: list[tuple[str, str]]) -> None:
-                    if tag == "a":
-                        self._in_a = True
-                        self._current_data = []
-                        for attr, val in attrs:
-                            if attr == "href":
-                                self._current_href = val
-
-                def handle_data(self, data: str) -> None:
-                    if self._in_a:
-                        self._current_data.append(data)
-
-                def handle_endtag(self, tag: str) -> None:
-                    if tag == "a" and self._in_a:
-                        text = "".join(self._current_data).strip()
-                        if text and self._current_href:
-                            self.links.append({
-                                "text": text,
-                                "href": self._current_href,
-                            })
-                        self._in_a = False
-                        self._current_href = ""
-
-            parser = PHAParser()
+            parser = LinkExtractorParser()
             try:
                 parser.feed(resp.text)
             except Exception:
@@ -129,7 +89,7 @@ class ATSDRHealthAssessmentsConnector(BaseConnector):
                     continue
 
                 title = f"ATSDR Health Assessment: {text}"
-                published_at = datetime.now(tz=timezone.utc)
+                published_at = UNKNOWN_DATE
 
                 records.append(
                     NormalizedRecord(
