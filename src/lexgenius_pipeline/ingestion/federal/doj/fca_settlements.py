@@ -7,9 +7,8 @@ healthcare/pharmaceutical fraud patterns.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from xml.etree import ElementTree as ET
-
-import re
 
 import structlog
 
@@ -124,6 +123,7 @@ class DOJFCASettlementsConnector(BaseConnector):
                     if published_at <= watermark.last_record_date:
                         continue
 
+                import re
                 clean_desc = re.sub(r"<[^>]+>", "", description).strip()
 
                 records.append(

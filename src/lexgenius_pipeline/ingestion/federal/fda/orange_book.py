@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import StringIO
+from typing import Any
 
 import structlog
 
-from lexgenius_pipeline.common.date_utils import parse_date
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
 from lexgenius_pipeline.common.models import IngestionQuery, NormalizedRecord, Watermark
@@ -25,6 +25,16 @@ logger = structlog.get_logger(__name__)
 
 _DOWNLOAD_URL = "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/orange-book"
 
+
+def _parse_date(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(tz=timezone.utc)
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y%m%d"):
+        try:
+            return datetime.strptime(value.strip()[:10], fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return datetime.now(tz=timezone.utc)
 
 
 class FDAOrangeBookConnector(BaseConnector):
@@ -96,7 +106,7 @@ class FDAOrangeBookConnector(BaseConnector):
                 if not any(t.lower() in combined for t in terms):
                     continue
 
-                published_at = parse_date(approval_date)
+                published_at = _parse_date(approval_date)
 
                 if watermark and watermark.last_record_date:
                     if published_at <= watermark.last_record_date:

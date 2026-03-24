@@ -7,10 +7,10 @@ health indicators supporting toxic/pharmaceutical tort causation analysis.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import structlog
 
-from lexgenius_pipeline.common.date_utils import parse_date
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
 from lexgenius_pipeline.common.models import IngestionQuery, NormalizedRecord, Watermark
@@ -24,6 +24,17 @@ logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://wonder.cdc.gov/controller/datarequest/D76"
 
+
+def _parse_date(value: str | None) -> datetime:
+    """Parse CDC WONDER date string (YYYY format)."""
+    if not value:
+        return datetime.now(tz=timezone.utc)
+    try:
+        return datetime.strptime(value.strip()[:4], "%Y").replace(
+            month=1, day=1, tzinfo=timezone.utc
+        )
+    except ValueError:
+        return datetime.now(tz=timezone.utc)
 
 
 class CDCWonderConnector(BaseConnector):
@@ -123,7 +134,7 @@ class CDCWonderConnector(BaseConnector):
                     ]
                     summary = "; ".join(p for p in summary_parts if p)
                     source_url = "https://wonder.cdc.gov/mortSQL.html"
-                    published_at = parse_date(year)
+                    published_at = _parse_date(year)
 
                     if watermark and watermark.last_record_date:
                         if published_at <= watermark.last_record_date:
@@ -155,9 +166,6 @@ class CDCWonderConnector(BaseConnector):
 
                     if len(records) >= query.max_records:
                         break
-
-                if len(records) >= query.max_records:
-                    break
 
         logger.info("cdc_wonder.fetched", count=len(records))
         return records

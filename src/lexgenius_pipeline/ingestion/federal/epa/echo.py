@@ -6,10 +6,10 @@ actions from the EPA ECHO REST API. Critical for environmental torts.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import structlog
 
-from lexgenius_pipeline.common.date_utils import parse_date
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
 from lexgenius_pipeline.common.models import IngestionQuery, NormalizedRecord, Watermark
@@ -22,6 +22,17 @@ from lexgenius_pipeline.settings import Settings, get_settings
 logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://echo.epa.gov/dataset/rpc"
+
+
+def _parse_date(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(tz=timezone.utc)
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(value.strip()[:19], fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return datetime.now(tz=timezone.utc)
 
 
 class EPAECHOConnector(BaseConnector):
@@ -66,20 +77,10 @@ class EPAECHOConnector(BaseConnector):
                     logger.warning("federal_epa_echo.fetch_error", term=term, exc_info=True)
                     continue
 
-                if resp.status_code != 200:
-                    raise ConnectorError(
-                        f"EPA ECHO returned HTTP {resp.status_code}",
-                        connector_id=self.connector_id,
-                    )
-
-                data = resp.json()
-                facilities = (
-                    data
-                    if isinstance(data, list)
-                    else data.get("Results", [])
-                    if isinstance(data, dict)
-                    else []
-                )
+                facilities = resp.json() if isinstance(resp.json(), list) else []
+                if not isinstance(facilities, list):
+                    data = resp.json()
+                    facilities = data if isinstance(data, list) else data.get("Results", [])
 
                 for fac in facilities:
                     if not isinstance(fac, dict):
@@ -97,7 +98,7 @@ class EPAECHOConnector(BaseConnector):
                     if not fac_name:
                         continue
 
-                    published_at = parse_date(date_str)
+                    published_at = _parse_date(date_str)
 
                     if watermark and watermark.last_record_date:
                         if published_at <= watermark.last_record_date:
@@ -157,7 +158,7 @@ class EPAECHOConnector(BaseConnector):
         async with create_http_client(timeout=30.0) as client:
             try:
                 resp = await client.get(
-                    "https://enviro.epa.gov/enviro/efservice/ECHO_FACILITY/rows/0:0/json",
+                    "https://echo.epa.gov/",
                     follow_redirects=True,
                 )
                 if resp.status_code < 500:

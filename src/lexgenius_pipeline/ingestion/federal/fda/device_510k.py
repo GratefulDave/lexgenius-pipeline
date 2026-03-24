@@ -7,6 +7,7 @@ studies signal safety concerns.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import structlog
 

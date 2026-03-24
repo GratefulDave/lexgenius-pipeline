@@ -6,10 +6,10 @@ Essential for automotive product liability and mass tort intelligence.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import structlog
 
-from lexgenius_pipeline.common.date_utils import parse_date
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
 from lexgenius_pipeline.common.models import IngestionQuery, NormalizedRecord, Watermark
@@ -23,6 +23,16 @@ logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://api.nhtsa.gov/recalls/recallsByVehicle"
 
+
+def _parse_date(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(tz=timezone.utc)
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(value.strip()[:19], fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return datetime.now(tz=timezone.utc)
 
 
 class NHTSARecallsConnector(BaseConnector):
@@ -78,7 +88,7 @@ class NHTSARecallsConnector(BaseConnector):
                         continue
 
                     recall_date = recall.get("ReportReceivedDate", "")
-                    published_at = parse_date(recall_date)
+                    published_at = _parse_date(recall_date)
 
                     if watermark and watermark.last_record_date:
                         if published_at <= watermark.last_record_date:
@@ -131,9 +141,6 @@ class NHTSARecallsConnector(BaseConnector):
 
                     if len(records) >= query.max_records:
                         break
-
-                if len(records) >= query.max_records:
-                    break
 
         logger.info("nhtsa_recalls.fetched", count=len(records))
         return records

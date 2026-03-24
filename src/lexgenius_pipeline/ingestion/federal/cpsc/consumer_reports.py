@@ -11,7 +11,6 @@ from typing import Any
 
 import structlog
 
-from lexgenius_pipeline.common.date_utils import parse_date
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
 from lexgenius_pipeline.common.models import IngestionQuery, NormalizedRecord, Watermark
@@ -25,6 +24,16 @@ logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://www.saferproducts.gov/RestWebServices/Incident"
 
+
+def _parse_date(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(tz=timezone.utc)
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(value.strip()[:19], fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return datetime.now(tz=timezone.utc)
 
 
 class CPSCConsumerReportsConnector(BaseConnector):
@@ -82,7 +91,7 @@ class CPSCConsumerReportsConnector(BaseConnector):
                     if not title:
                         title = f"CPSC Incident Report {incident_id}"
 
-                    published_at = parse_date(incident_date)
+                    published_at = _parse_date(incident_date)
 
                     if watermark and watermark.last_record_date:
                         if published_at <= watermark.last_record_date:
@@ -141,9 +150,6 @@ class CPSCConsumerReportsConnector(BaseConnector):
 
                     if len(records) >= query.max_records:
                         break
-
-                if len(records) >= query.max_records:
-                    break
 
         logger.info("cpsc_consumer_reports.fetched", count=len(records))
         return records

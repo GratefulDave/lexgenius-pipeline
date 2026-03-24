@@ -1,15 +1,10 @@
 """Tests for federal agency connectors."""
 from __future__ import annotations
 
-from unittest.mock import patch
-
-import httpx
 import pytest
-import respx
 
 from lexgenius_pipeline.common.models import IngestionQuery
 from lexgenius_pipeline.common.types import HealthStatus, SourceTier
-from lexgenius_pipeline.settings import Settings
 
 
 # ---------------------------------------------------------------------------
@@ -69,27 +64,8 @@ from lexgenius_pipeline.ingestion.federal.nih.seer import NIHSEERConnector
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(autouse=True)
-def mock_settings():
-    """Provide default settings so connectors can be instantiated in clean CI."""
-    with patch("lexgenius_pipeline.settings.get_settings", return_value=Settings()):
-        yield
-
-
-# ---------------------------------------------------------------------------
 # Collect all new federal connectors for bulk testing
 # ---------------------------------------------------------------------------
-
-# Connectors whose data source doesn't support incremental fetching
-_NON_INCREMENTAL_IDS = {
-    "federal.atsdr.health_assessments",
-    "federal.fjc.idb",
-    "federal.nih.seer",
-    "federal.naag.actions",
-}
 
 ALL_NEW_CONNECTORS = [
     # CDC
@@ -167,14 +143,7 @@ def test_connector_federal_tier(expected_id, cls):
 
 @pytest.mark.parametrize("expected_id,cls", ALL_NEW_CONNECTORS)
 def test_connector_supports_incremental(expected_id, cls):
-    if expected_id in _NON_INCREMENTAL_IDS:
-        assert cls.supports_incremental is False, (
-            f"{cls.__name__} should NOT support incremental (scrape-based)"
-        )
-    else:
-        assert cls.supports_incremental is True, (
-            f"{cls.__name__} should support incremental"
-        )
+    assert cls.supports_incremental is True, f"{cls.__name__} should support incremental"
 
 
 # ---------------------------------------------------------------------------
@@ -188,41 +157,36 @@ def test_connector_has_source_label(expected_id, cls):
 
 
 # ---------------------------------------------------------------------------
-# fetch_latest returns empty for empty query (no terms) — mocked network
+# fetch_latest returns empty for empty query (no terms)
 # ---------------------------------------------------------------------------
 
 _EMPTY_QUERY = IngestionQuery()
 
 
-@respx.mock
 @pytest.mark.parametrize("expected_id,cls", ALL_NEW_CONNECTORS)
 @pytest.mark.asyncio
 async def test_fetch_latest_no_terms_returns_empty(expected_id, cls):
     """Connectors should return empty list when no query terms provided."""
-    # Route all HTTP requests to a generic 200 empty-object response
-    respx.route().mock(return_value=httpx.Response(200, json={}))
     connector = cls()
     result = await connector.fetch_latest(_EMPTY_QUERY)
     assert isinstance(result, list)
 
 
 # ---------------------------------------------------------------------------
-# fetch_latest with terms returns list (structure test, mocked network)
+# fetch_latest with terms returns list (structure test, may be empty)
 # ---------------------------------------------------------------------------
 
 _QUERY_WITH_TERMS = IngestionQuery(query_terms=["cancer", "recall", "contamination"])
 
 
-@respx.mock
 @pytest.mark.parametrize("expected_id,cls", ALL_NEW_CONNECTORS)
 @pytest.mark.asyncio
 async def test_fetch_latest_with_terms_returns_list(expected_id, cls):
     """Connectors should return a list (possibly empty) when given terms."""
-    # Return empty JSON object so connectors parse successfully but find no matches
-    respx.route().mock(return_value=httpx.Response(200, json={}))
     connector = cls()
     result = await connector.fetch_latest(_QUERY_WITH_TERMS)
     assert isinstance(result, list)
+    # Each item should be a NormalizedRecord if non-empty
     for record in result:
         assert hasattr(record, "title")
         assert hasattr(record, "source_connector_id")
@@ -230,15 +194,13 @@ async def test_fetch_latest_with_terms_returns_list(expected_id, cls):
 
 
 # ---------------------------------------------------------------------------
-# health_check returns HealthStatus — mocked network
+# health_check returns HealthStatus
 # ---------------------------------------------------------------------------
 
-@respx.mock
 @pytest.mark.parametrize("expected_id,cls", ALL_NEW_CONNECTORS)
 @pytest.mark.asyncio
 async def test_health_check_returns_status(expected_id, cls):
     """Health check should return a valid HealthStatus enum value."""
-    respx.route().mock(return_value=httpx.Response(200, text="OK"))
     connector = cls()
     status = await connector.health_check()
     assert isinstance(status, HealthStatus)
@@ -259,10 +221,8 @@ def test_connector_repr(expected_id, cls):
 # FCA settlements specifically: should accept terms and return list
 # ---------------------------------------------------------------------------
 
-@respx.mock
 @pytest.mark.asyncio
 async def test_doj_fca_no_terms_returns_list():
-    respx.route().mock(return_value=httpx.Response(200, json={}))
     connector = DOJFCASettlementsConnector()
     result = await connector.fetch_latest(IngestionQuery())
     assert isinstance(result, list)
