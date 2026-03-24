@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     epa_api_key: str = ""
     pacer_username: str = ""
     pacer_password: str = ""
+    reddit_client_id: str = ""
+    reddit_client_secret: str = ""
 
     # Logging
     log_level: str = "INFO"
@@ -63,6 +65,8 @@ class Settings(BaseSettings):
             "comptox_api_key": "CTX_API_KEY",
             "llm_api_key": "ANTHROPIC_API_KEY",
             "db_url": "RDS_DATABASE_URL",
+            "reddit_client_id": "REDDIT_CLIENT_ID",
+            "reddit_client_secret": "REDDIT_CLIENT_SECRET",
         }
         for field_name, env_var in mapping.items():
             if not values.get(field_name) and not values.get(f"LGP_{field_name.upper()}"):
