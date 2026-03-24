@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
 import structlog
 
-from lexgenius_pipeline.common.errors import ConnectorError
+from lexgenius_pipeline.common.errors import AuthenticationError, ConnectorError, RateLimitError
 from lexgenius_pipeline.common.http_client import create_http_client
 from lexgenius_pipeline.common.models import IngestionQuery, NormalizedRecord, Watermark
+from lexgenius_pipeline.common.rate_limiter import AsyncRateLimiter
 from lexgenius_pipeline.common.types import HealthStatus, RecordType, SourceTier
 from lexgenius_pipeline.ingestion.base import BaseConnector
 from lexgenius_pipeline.ingestion.normalize import generate_fingerprint
@@ -23,9 +25,17 @@ def _parse_reg_date(date_str: str | None) -> datetime:
         return datetime.now(tz=timezone.utc)
     try:
         dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        return dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
     except Exception:
+        logger.warning("regulations_gov.malformed_date", date_str=date_str)
         return datetime.now(tz=timezone.utc)
+
+
+def _redact_api_key(url: str, api_key: str | None) -> str:
+    """Replace the literal api_key value in a URL with '***'."""
+    if not api_key:
+        return url
+    return url.replace(api_key, "***")
 
 
 class RegulationsGovConnector(BaseConnector):
@@ -38,7 +48,8 @@ class RegulationsGovConnector(BaseConnector):
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
-        self._client = create_http_client()
+        # 1,000 req/hr = ~0.278/s
+        self._rate_limiter = AsyncRateLimiter(rate=1000 / 3600, burst=5)
 
     async def fetch_latest(
         self,
@@ -59,17 +70,34 @@ class RegulationsGovConnector(BaseConnector):
         if self._settings.regulations_gov_api_key:
             params["api_key"] = self._settings.regulations_gov_api_key
 
-        try:
-            resp = await self._client.get(_BASE_URL, params=params)
-        except Exception as exc:
-            raise ConnectorError(str(exc), self.connector_id) from exc
+        await self._rate_limiter.acquire()
 
+        async with create_http_client() as client:
+            try:
+                resp = await client.get(_BASE_URL, params=params)
+            except Exception as exc:
+                raise ConnectorError(str(exc), self.connector_id) from exc
+
+        if resp.status_code == 429:
+            retry_after = float(resp.headers.get("Retry-After", 3600))
+            raise RateLimitError(
+                "HTTP 429 rate limited", self.connector_id, retry_after=retry_after
+            )
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(
+                f"HTTP {resp.status_code} authentication failed", self.connector_id
+            )
         if resp.status_code == 404:
             return []
         if resp.status_code >= 400:
-            raise ConnectorError(f"HTTP {resp.status_code}", self.connector_id)
+            safe_url = _redact_api_key(str(resp.url), self._settings.regulations_gov_api_key)
+            raise ConnectorError(f"HTTP {resp.status_code} {safe_url}", self.connector_id)
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except (json.JSONDecodeError, Exception) as exc:
+            raise ConnectorError(f"Invalid JSON response: {exc}", self.connector_id) from exc
+
         items = data.get("data", [])
         records: list[NormalizedRecord] = []
 
@@ -119,12 +147,14 @@ class RegulationsGovConnector(BaseConnector):
         return records
 
     async def health_check(self) -> HealthStatus:
-        try:
-            resp = await self._client.get(
-                _BASE_URL, params={"filter[searchTerm]": "test", "page[size]": 1}
-            )
-            if resp.status_code < 500:
-                return HealthStatus.HEALTHY
-            return HealthStatus.DEGRADED
-        except Exception:
-            return HealthStatus.FAILED
+        params: dict[str, str | int] = {"filter[searchTerm]": "test", "page[size]": 1}
+        if self._settings.regulations_gov_api_key:
+            params["api_key"] = self._settings.regulations_gov_api_key
+        async with create_http_client() as client:
+            try:
+                resp = await client.get(_BASE_URL, params=params)
+                if resp.status_code < 500:
+                    return HealthStatus.HEALTHY
+                return HealthStatus.DEGRADED
+            except Exception:
+                return HealthStatus.FAILED

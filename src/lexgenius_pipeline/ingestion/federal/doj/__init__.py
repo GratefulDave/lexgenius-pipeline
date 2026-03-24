@@ -1,8 +1,4 @@
-"""Department of Justice connector placeholder.
+from lexgenius_pipeline.ingestion.federal.doj.fca_settlements import DOJFCASettlementsConnector
+from lexgenius_pipeline.ingestion.federal.doj.press_releases import DOJPressReleasesConnector
 
-This package is reserved for DOJ data connectors (press releases,
-consent decrees, settlement agreements, enforcement actions).
-
-To implement: subclass BaseConnector with connector_id = "federal.doj.*"
-and source_tier = SourceTier.FEDERAL.
-"""
+__all__ = ["DOJFCASettlementsConnector", "DOJPressReleasesConnector"]
