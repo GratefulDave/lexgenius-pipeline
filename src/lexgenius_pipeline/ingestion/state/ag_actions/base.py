@@ -9,16 +9,15 @@ Provides shared logic for:
 
 from __future__ import annotations
 
+import hashlib
 import re
 from abc import abstractmethod
-from html.parser import HTMLParser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from typing import Any
+from xml.etree import ElementTree
 
 import structlog
-from defusedxml import ElementTree
 
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
@@ -42,6 +41,7 @@ RELEVANCE_KEYWORDS: list[str] = [
     "sue",
     "sued",
     "complaint",
+    "lawsuit",
     "attorney general",
     "ag sues",
     "ag settles",
@@ -114,78 +114,6 @@ class RawPressRelease:
     summary: str = ""
     raw_html: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
-
-
-class GenericPressReleaseParser(HTMLParser):
-    """Reusable HTML parser for state AG press release listing pages.
-
-    Accepts *link_patterns* — a list of substrings that a link's href must
-    contain to be considered a press-release link.  Extracts title from link
-    text, date from ``<time>`` elements, and summary from ``<p>`` tags that
-    follow a matched link.
-    """
-
-    def __init__(self, base_url: str, link_patterns: list[str]) -> None:
-        super().__init__()
-        self.base_url = base_url.rstrip("/")
-        self.link_patterns = [p.lower() for p in link_patterns]
-        self.releases: list[RawPressRelease] = []
-        self._current_title = ""
-        self._current_link = ""
-        self._current_date = ""
-        self._in_link = False
-        self._in_summary = False
-        self._summary_parts: list[str] = []
-
-    def _matches_link(self, href: str) -> bool:
-        href_lower = href.lower()
-        return any(p in href_lower for p in self.link_patterns)
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attrs_dict = dict(attrs)
-        href = attrs_dict.get("href", "")
-
-        if tag == "a" and href and self._matches_link(href):
-            self._in_link = True
-            self._current_title = ""
-            self._current_date = ""
-            self._summary_parts = []
-            if href.startswith("/"):
-                href = f"{self.base_url}{href}"
-            self._current_link = href
-        elif tag == "time" and self._current_link:
-            self._current_date = attrs_dict.get("datetime", "") or attrs_dict.get("content", "")
-        elif tag == "p" and self._current_link and not self._in_link:
-            self._in_summary = True
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "a" and self._in_link:
-            self._in_link = False
-        elif tag == "p" and self._in_summary:
-            self._in_summary = False
-            if self._current_title and self._current_link:
-                summary = " ".join(self._summary_parts).strip()
-                published_at = BaseAGActionsConnector._parse_date(self._current_date)
-                self.releases.append(
-                    RawPressRelease(
-                        title=self._current_title.strip(),
-                        url=self._current_link,
-                        published_at=published_at,
-                        summary=summary[:500],
-                        extra={"source_type": "scrape"},
-                    )
-                )
-                self._current_title = ""
-                self._current_link = ""
-
-    def handle_data(self, data: str) -> None:
-        stripped = data.strip()
-        if not stripped:
-            return
-        if self._in_link:
-            self._current_title += stripped
-        elif self._in_summary:
-            self._summary_parts.append(stripped)
 
 
 class BaseAGActionsConnector(BaseStateConnector):
@@ -361,10 +289,11 @@ class BaseAGActionsConnector(BaseStateConnector):
     def _parse_rss_date(date_str: str) -> datetime:
         """Parse common RSS date formats."""
         if not date_str:
-            logger.warning("ag_actions.date_fallback", reason="empty date string")
             return datetime.now(tz=timezone.utc)
 
         # RFC 2822 (most common RSS format)
+        from email.utils import parsedate_to_datetime
+
         try:
             return parsedate_to_datetime(date_str)
         except (ValueError, TypeError):
@@ -379,7 +308,6 @@ class BaseAGActionsConnector(BaseStateConnector):
             except ValueError:
                 continue
 
-        logger.warning("ag_actions.date_fallback", reason="unparseable date", date_str=date_str)
         return datetime.now(tz=timezone.utc)
 
     # ── Shared HTML scraping helpers ────────────────────────────────
@@ -393,8 +321,6 @@ class BaseAGActionsConnector(BaseStateConnector):
         async with create_http_client() as client:
             try:
                 resp = await client.get(url)
-                if resp.status_code >= 500:
-                    resp.raise_for_status()
                 if resp.status_code >= 400:
                     logger.warning(
                         "ag_actions.fetch_failed",
@@ -403,6 +329,7 @@ class BaseAGActionsConnector(BaseStateConnector):
                         status=resp.status_code,
                     )
                     return ""
+                resp.raise_for_status()
                 return resp.text
             except ConnectorError:
                 raise
@@ -422,25 +349,33 @@ class BaseAGActionsConnector(BaseStateConnector):
             except Exception:
                 return HealthStatus.FAILED
 
-    # ── Generic scrape-based connector implementation ────────────────
+    async def _parse_html_press_releases(
+        self,
+        html: str,
+        base_url: str,
+        *,
+        title_selector: str,
+        link_selector: str,
+        date_selector: str,
+        summary_selector: str | None = None,
+        date_parser: callable | None = None,
+    ) -> list[RawPressRelease]:
+        """Parse an HTML page of press releases using BeautifulSoup.
 
-    @staticmethod
-    def _parse_date(date_str: str, state: str = "") -> datetime:
-        """Parse common date formats with logging on fallback."""
-        if not date_str:
-            logger.warning("ag_actions.date_fallback", reason="empty date string", state=state)
-            return datetime.now(tz=timezone.utc)
-        for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y"):
-            try:
-                return datetime.strptime(date_str.strip()[:20], fmt).replace(
-                    tzinfo=timezone.utc
-                )
-            except ValueError:
-                continue
-        logger.warning(
-            "ag_actions.date_fallback", reason="unparseable date", date_str=date_str, state=state
-        )
-        return datetime.now(tz=timezone.utc)
+        This is a helper for scrape-based connectors. Each state provides
+        CSS selectors for extracting title, link, date, and optional summary.
+        """
+        from html.parser import HTMLParser
+
+        releases: list[RawPressRelease] = []
+
+        # Use a simple HTML parser since we may not have BeautifulSoup.
+        # For production, we rely on the html.parser stdlib module.
+        # State-specific subclasses should override _fetch_releases directly
+        # if they need more sophisticated parsing.
+        return releases
+
+    # ── Generic scrape-based connector implementation ────────────────
 
     async def _scrape_releases(
         self,

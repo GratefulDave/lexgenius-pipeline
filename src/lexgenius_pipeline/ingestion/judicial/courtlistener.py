@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
 import structlog
 
-from lexgenius_pipeline.common.errors import ConnectorError
+from lexgenius_pipeline.common.errors import AuthenticationError, ConnectorError, RateLimitError
 from lexgenius_pipeline.common.http_client import create_http_client
 from lexgenius_pipeline.common.models import IngestionQuery, NormalizedRecord, Watermark
+from lexgenius_pipeline.common.rate_limiter import AsyncRateLimiter
 from lexgenius_pipeline.common.types import HealthStatus, RecordType, SourceTier
 from lexgenius_pipeline.ingestion.base import BaseConnector
 from lexgenius_pipeline.ingestion.normalize import generate_fingerprint
@@ -23,8 +25,9 @@ def _parse_cl_date(date_str: str | None) -> datetime:
         return datetime.now(tz=timezone.utc)
     try:
         dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        return dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
     except Exception:
+        logger.warning("courtlistener.malformed_date", date_str=date_str)
         return datetime.now(tz=timezone.utc)
 
 
@@ -38,7 +41,16 @@ class CourtListenerConnector(BaseConnector):
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
-        self._client = create_http_client()
+        # 100 req/min authenticated (~1.67/s), 10 req/min unauthenticated (~0.17/s)
+        # Use conservative unauthenticated rate; upgraded per-request if key present
+        self._rate_limiter_auth = AsyncRateLimiter(rate=100 / 60, burst=5)
+        self._rate_limiter_unauth = AsyncRateLimiter(rate=10 / 60, burst=2)
+
+    def _auth_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if self._settings.courtlistener_api_key:
+            headers["Authorization"] = f"Token {self._settings.courtlistener_api_key}"
+        return headers
 
     async def fetch_latest(
         self,
@@ -56,21 +68,40 @@ class CourtListenerConnector(BaseConnector):
             "type": "o",
             "order_by": "dateFiled desc",
         }
-        headers: dict[str, str] = {}
-        if self._settings.courtlistener_api_key:
-            headers["Authorization"] = f"Token {self._settings.courtlistener_api_key}"
+        headers = self._auth_headers()
 
-        try:
-            resp = await self._client.get(_BASE_URL, params=params, headers=headers)
-        except Exception as exc:
-            raise ConnectorError(str(exc), self.connector_id) from exc
+        rate_limiter = (
+            self._rate_limiter_auth
+            if self._settings.courtlistener_api_key
+            else self._rate_limiter_unauth
+        )
+        await rate_limiter.acquire()
 
+        async with create_http_client() as client:
+            try:
+                resp = await client.get(_BASE_URL, params=params, headers=headers)
+            except Exception as exc:
+                raise ConnectorError(str(exc), self.connector_id) from exc
+
+        if resp.status_code == 429:
+            retry_after = float(resp.headers.get("Retry-After", 60))
+            raise RateLimitError(
+                f"HTTP 429 rate limited", self.connector_id, retry_after=retry_after
+            )
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(
+                f"HTTP {resp.status_code} authentication failed", self.connector_id
+            )
         if resp.status_code == 404:
             return []
         if resp.status_code >= 400:
             raise ConnectorError(f"HTTP {resp.status_code}", self.connector_id)
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except (json.JSONDecodeError, Exception) as exc:
+            raise ConnectorError(f"Invalid JSON response: {exc}", self.connector_id) from exc
+
         results = data.get("results", [])
         records: list[NormalizedRecord] = []
 
@@ -116,13 +147,12 @@ class CourtListenerConnector(BaseConnector):
         return records
 
     async def health_check(self) -> HealthStatus:
-        headers: dict[str, str] = {}
-        if self._settings.courtlistener_api_key:
-            headers["Authorization"] = f"Token {self._settings.courtlistener_api_key}"
-        try:
-            resp = await self._client.get(_BASE_URL, params={"q": "test", "type": "o"}, headers=headers)
-            if resp.status_code < 500:
-                return HealthStatus.HEALTHY
-            return HealthStatus.DEGRADED
-        except Exception:
-            return HealthStatus.FAILED
+        headers = self._auth_headers()
+        async with create_http_client() as client:
+            try:
+                resp = await client.get(_BASE_URL, params={"q": "test", "type": "o"}, headers=headers)
+                if resp.status_code < 500:
+                    return HealthStatus.HEALTHY
+                return HealthStatus.DEGRADED
+            except Exception:
+                return HealthStatus.FAILED
