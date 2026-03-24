@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import functools
 from datetime import datetime, timezone
+from urllib.parse import quote_plus
 
 import structlog
 
@@ -50,6 +53,7 @@ class GoogleTrendsConnector(BaseConnector):
 
         records: list[NormalizedRecord] = []
         pytrends = TrendReq(hl="en-US", tz=300)
+        loop = asyncio.get_event_loop()
 
         for term in terms:
             await self._rate_limiter.acquire()
@@ -58,8 +62,15 @@ class GoogleTrendsConnector(BaseConnector):
             keywords = keywords[:5]
 
             try:
-                pytrends.build_payload(keywords, timeframe="today 3-m", geo="US")
-                interest_df = pytrends.interest_over_time()
+                await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        pytrends.build_payload, keywords, timeframe="today 3-m", geo="US"
+                    ),
+                )
+                interest_df = await loop.run_in_executor(
+                    None, pytrends.interest_over_time
+                )
             except Exception as exc:
                 logger.warning(
                     "google_trends.api_error",
@@ -82,8 +93,9 @@ class GoogleTrendsConnector(BaseConnector):
             max_interest = int(latest_row.max()) if not latest_row.empty else 0
             peak_keyword = latest_row.idxmax() if not latest_row.empty else keywords[0]
 
+            encoded_keywords = "+".join(quote_plus(kw) for kw in keywords[:3])
             source_url = (
-                f"https://trends.google.com/trends/explore?q={'+'.join(keywords[:3])}&geo=US"
+                f"https://trends.google.com/trends/explore?q={encoded_keywords}&geo=US"
             )
 
             trend_data = {kw: int(latest_row.get(kw, 0)) for kw in keywords if kw in latest_row}
@@ -124,8 +136,14 @@ class GoogleTrendsConnector(BaseConnector):
             from pytrends.request import TrendReq
 
             pytrends = TrendReq(hl="en-US", tz=300)
-            pytrends.build_payload(["test"], timeframe="today 1-m", geo="US")
-            df = pytrends.interest_over_time()
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                functools.partial(
+                    pytrends.build_payload, ["test"], timeframe="today 1-m", geo="US"
+                ),
+            )
+            df = await loop.run_in_executor(None, pytrends.interest_over_time)
             if df is not None and not df.empty:
                 return HealthStatus.HEALTHY
             return HealthStatus.DEGRADED

@@ -15,12 +15,12 @@ dependencies = [
     "aiohttp>=3.9",
     "aiosqlite>=0.19",
     "scipy>=1.11",
-    "feedparser>=6.0",
-    "pytrends>=4.9",
+    "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]
 postgresql = ["asyncpg>=0.29"]
+trends = ["pytrends>=4.9"]
 dev = [
     "pytest",
     "pytest-asyncio",
