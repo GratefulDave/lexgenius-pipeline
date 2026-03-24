@@ -96,11 +96,11 @@ class _NYAGParser(HTMLParser):
                 self._current_p_depth = 0
 
     def handle_data(self, data: str) -> None:
-        if self._in_title and not self._current_link:
+        if self._in_title and self._current_link:
+            # Text inside <a> within <h3> — this is the title
             self._current_title += data.strip()
         elif self._in_title:
-            # Data inside <a> within <h3>
-            pass  # title was set from starttag
+            self._current_title += data.strip()
         elif self._in_summary:
             self._current_summary_parts.append(data.strip())
 
