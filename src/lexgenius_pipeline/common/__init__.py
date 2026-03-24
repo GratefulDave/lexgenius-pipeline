@@ -7,6 +7,8 @@ from .errors import (
     RepositoryError,
     WorkflowError,
 )
+from .date_utils import UNKNOWN_DATE, parse_date
+from .html_utils import LinkExtractorParser
 from .http_client import create_http_client
 from .logging import get_logger, setup_logging
 from .models import IngestionQuery, NormalizedRecord, RunMetrics, Watermark
@@ -40,6 +42,10 @@ __all__ = [
     "DataValidationError",
     "RepositoryError",
     "WorkflowError",
+    # date / html
+    "parse_date",
+    "UNKNOWN_DATE",
+    "LinkExtractorParser",
     # utilities
     "AsyncRateLimiter",
     "default_retry",
