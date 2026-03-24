@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 
 import structlog
+from bs4 import BeautifulSoup
 
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
@@ -17,29 +18,11 @@ from lexgenius_pipeline.settings import Settings, get_settings
 logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://www.drugs.com/comments"
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-# Matches review blocks with rating and text content
-_REVIEW_RE = re.compile(
-    r'<div[^>]*class="[^"]*(?:ddc-comment|user-comment|review-comment)[^"]*"[^>]*>(.*?)</div>',
-    re.IGNORECASE | re.DOTALL,
-)
 _RATING_RE = re.compile(r"(\d+(?:\.\d+)?)\s*/\s*(?:10|5)", re.IGNORECASE)
-_DATE_RE = re.compile(
-    r'<span[^>]*class="[^"]*(?:comment-date|date)[^"]*"[^>]*>([^<]+)</span>',
-    re.IGNORECASE,
-)
-_REVIEW_TEXT_RE = re.compile(
-    r'<(?:p|span)[^>]*class="[^"]*(?:comment-text|review-text|user-review)[^"]*"[^>]*>(.*?)</(?:p|span)>',
-    re.IGNORECASE | re.DOTALL,
-)
 _SIDE_EFFECT_RE = re.compile(
     r"(?:side\s*effects?|adverse|symptoms?|experienced?|suffered?|caused?)[\s:]+([^.!?]{10,100})",
     re.IGNORECASE,
 )
-
-
-def _strip_html(text: str) -> str:
-    return _HTML_TAG_RE.sub("", text).strip()
 
 
 def _parse_review_date(date_str: str) -> datetime:
@@ -49,6 +32,7 @@ def _parse_review_date(date_str: str) -> datetime:
             return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
+    logger.warning("drugsdotcom_reviews.unparseable_date", date_str=date_str)
     return datetime.now(tz=timezone.utc)
 
 
@@ -98,25 +82,31 @@ class DrugsDotComReviewsConnector(BaseConnector):
                     )
                     continue
 
-                html = resp.text
-                reviews = _REVIEW_RE.findall(html)
-                review_dates = _DATE_RE.findall(html)
-                review_texts = _REVIEW_TEXT_RE.findall(html)
+                soup = BeautifulSoup(resp.text, "html.parser")
+                review_nodes = soup.find_all(
+                    "div", class_=re.compile(r"ddc-comment|user-comment|review-comment")
+                )
 
-                for i, review_html in enumerate(reviews):
-                    review_text = _strip_html(review_texts[i]) if i < len(review_texts) else ""
-                    if not review_text:
-                        review_text = _strip_html(review_html)
+                for node in review_nodes:
+                    # Extract text from within this review node
+                    text_el = node.find(
+                        ["p", "span"],
+                        class_=re.compile(r"comment-text|review-text|user-review"),
+                    )
+                    review_text = text_el.get_text(strip=True) if text_el else node.get_text(strip=True)
 
                     if not review_text or len(review_text) < 20:
                         continue
 
-                    rating_match = _RATING_RE.search(review_html)
+                    rating_match = _RATING_RE.search(node.get_text())
                     rating = float(rating_match.group(1)) if rating_match else None
 
+                    date_el = node.find(
+                        "span", class_=re.compile(r"comment-date|date")
+                    )
                     published_at = (
-                        _parse_review_date(review_dates[i])
-                        if i < len(review_dates)
+                        _parse_review_date(date_el.get_text(strip=True))
+                        if date_el
                         else datetime.now(tz=timezone.utc)
                     )
                     if watermark and watermark.last_record_date:

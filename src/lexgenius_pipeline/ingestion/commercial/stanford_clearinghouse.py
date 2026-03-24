@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 
 import structlog
+from bs4 import BeautifulSoup
 
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
@@ -17,27 +18,6 @@ from lexgenius_pipeline.settings import Settings, get_settings
 logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://law.stanford.edu/class-action-clearinghouse/"
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_ARTICLE_RE = re.compile(
-    r'<h[234][^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([^<]+)</a>',
-    re.IGNORECASE,
-)
-_DATE_RE = re.compile(
-    r'<time[^>]*datetime="([^"]+)"[^>]*>',
-    re.IGNORECASE,
-)
-_SPAN_DATE_RE = re.compile(
-    r'<span[^>]*class="[^"]*date[^"]*"[^>]*>([^<]+)</span>',
-    re.IGNORECASE,
-)
-_EXCERPT_RE = re.compile(
-    r'<div[^>]*class="[^"]*(?:entry-content|excerpt|summary|description)[^"]*"[^>]*>(.*?)</div>',
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _strip_html(text: str) -> str:
-    return _HTML_TAG_RE.sub("", text).strip()
 
 
 def _parse_date(date_str: str) -> datetime:
@@ -51,6 +31,7 @@ def _parse_date(date_str: str) -> datetime:
             return datetime.strptime(date_str.strip(), fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
+    logger.warning("stanford_clearinghouse.unparseable_date", date_str=date_str)
     return datetime.now(tz=timezone.utc)
 
 
@@ -81,18 +62,16 @@ class StanfordClearinghouseConnector(BaseConnector):
             if resp.status_code >= 400:
                 raise ConnectorError(f"HTTP {resp.status_code}", self.connector_id)
 
-            html = resp.text
-            articles = _ARTICLE_RE.findall(html)
-            dates = _DATE_RE.findall(html)
-            if not dates:
-                dates = _SPAN_DATE_RE.findall(html)
-            excerpts = _EXCERPT_RE.findall(html)
-
+            soup = BeautifulSoup(resp.text, "html.parser")
             terms_lower = [t.lower() for t in (query.query_terms or [])]
 
-            for i, (link, title) in enumerate(articles):
-                title = title.strip()
-                link = link.strip()
+            for heading in soup.find_all(["h2", "h3", "h4"]):
+                link_el = heading.find("a", href=True)
+                if not link_el:
+                    continue
+
+                title = link_el.get_text(strip=True)
+                link = link_el["href"]
                 if not link.startswith("http"):
                     link = f"https://law.stanford.edu{link}"
 
@@ -103,14 +82,31 @@ class StanfordClearinghouseConnector(BaseConnector):
                     if not any(term in title.lower() for term in terms_lower):
                         continue
 
+                # Find date - try <time> first, then <span class="date">
+                time_el = heading.find_next("time", attrs={"datetime": True})
+
+                date_str = None
+                if time_el:
+                    date_str = time_el.get("datetime", "")
+                else:
+                    span_date = heading.find_next("span", class_=re.compile(r"date"))
+                    if span_date:
+                        date_str = span_date.get_text(strip=True)
+
                 published_at = (
-                    _parse_date(dates[i]) if i < len(dates) else datetime.now(tz=timezone.utc)
+                    _parse_date(date_str)
+                    if date_str
+                    else datetime.now(tz=timezone.utc)
                 )
                 if watermark and watermark.last_record_date:
                     if published_at <= watermark.last_record_date:
                         continue
 
-                excerpt_text = _strip_html(excerpts[i]) if i < len(excerpts) else ""
+                excerpt_el = heading.find_next(
+                    "div",
+                    class_=re.compile(r"entry-content|excerpt|summary|description"),
+                )
+                excerpt_text = excerpt_el.get_text(strip=True) if excerpt_el else ""
                 summary = excerpt_text[:500] if excerpt_text else title
 
                 records.append(

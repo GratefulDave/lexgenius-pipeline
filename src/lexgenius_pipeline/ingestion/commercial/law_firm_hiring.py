@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 
 import structlog
+from bs4 import BeautifulSoup
 
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
@@ -16,35 +17,13 @@ from lexgenius_pipeline.settings import Settings, get_settings
 
 logger = structlog.get_logger(__name__)
 
+# WARNING: Scraping Indeed may violate their robots.txt and Terms of Service.
+# Consider migrating to the Indeed Publisher API or Indeed Apply API for
+# production use. This connector is provided for prototyping purposes only.
 _SEARCH_URLS = [
     "https://www.indeed.com/jobs?q=%22mass+tort%22+attorney",
     "https://www.indeed.com/jobs?q=%22product+liability%22+attorney",
 ]
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_JOB_TITLE_RE = re.compile(
-    r'<(?:h2|a)[^>]*class="[^"]*(?:jobTitle|job-title|title)[^"]*"[^>]*>(?:<[^>]*>)*([^<]+)',
-    re.IGNORECASE,
-)
-_JOB_LINK_RE = re.compile(
-    r'<a[^>]*href="(/rc/[^"]+|/viewjob[^"]+|/pagead/[^"]+)"[^>]*>',
-    re.IGNORECASE,
-)
-_COMPANY_RE = re.compile(
-    r'<span[^>]*class="[^"]*(?:company|companyName)[^"]*"[^>]*>([^<]+)</span>',
-    re.IGNORECASE,
-)
-_LOCATION_RE = re.compile(
-    r'<div[^>]*class="[^"]*(?:companyLocation|location)[^"]*"[^>]*>([^<]+)</div>',
-    re.IGNORECASE,
-)
-_DATE_RE = re.compile(
-    r'<span[^>]*class="[^"]*date[^"]*"[^>]*>([^<]+)</span>',
-    re.IGNORECASE,
-)
-
-
-def _strip_html(text: str) -> str:
-    return _HTML_TAG_RE.sub("", text).strip()
 
 
 class LawFirmHiringConnector(BaseConnector):
@@ -85,28 +64,49 @@ class LawFirmHiringConnector(BaseConnector):
                     )
                     continue
 
-                html = resp.text
-                titles = _JOB_TITLE_RE.findall(html)
-                links = _JOB_LINK_RE.findall(html)
-                companies = _COMPANY_RE.findall(html)
-                locations = _LOCATION_RE.findall(html)
-                dates = _DATE_RE.findall(html)
-
+                soup = BeautifulSoup(resp.text, "html.parser")
                 published_at = datetime.now(tz=timezone.utc)
 
-                for i, title in enumerate(titles):
-                    title = _strip_html(title).strip()
+                # Find job cards by heading elements with job title classes
+                for heading in soup.find_all(
+                    ["h2", "a"],
+                    class_=re.compile(r"jobTitle|job-title|title"),
+                ):
+                    title = heading.get_text(strip=True)
                     if not title:
                         continue
 
-                    link = links[i] if i < len(links) else ""
-                    if link and not link.startswith("http"):
-                        link = f"https://www.indeed.com{link}"
+                    # Extract link
+                    link_el = heading if heading.name == "a" else heading.find("a", href=True)
+                    link = ""
+                    if link_el and link_el.get("href"):
+                        link = link_el["href"]
+                        if not link.startswith("http"):
+                            link = f"https://www.indeed.com{link}"
                     source_url = link or search_url
 
-                    company = companies[i].strip() if i < len(companies) else ""
-                    location = locations[i].strip() if i < len(locations) else ""
-                    date_text = dates[i].strip() if i < len(dates) else ""
+                    # Find company and location from nearby elements
+                    card = heading.find_parent()
+                    company = ""
+                    location = ""
+                    date_text = ""
+
+                    if card:
+                        company_el = card.find(
+                            "span", class_=re.compile(r"company|companyName")
+                        )
+                        if company_el:
+                            company = company_el.get_text(strip=True)
+
+                        location_el = card.find(
+                            "div", class_=re.compile(r"companyLocation|location")
+                        )
+                        if location_el:
+                            location = location_el.get_text(strip=True)
+
+                        date_el = card.find("span", class_=re.compile(r"date"))
+                        if date_el:
+                            date_text = date_el.get_text(strip=True)
 
                     summary = f"{title} at {company}" if company else title
                     if location:

@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 
 import structlog
+from bs4 import BeautifulSoup
 
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
@@ -17,25 +18,6 @@ from lexgenius_pipeline.settings import Settings, get_settings
 logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://www.aboutlawsuits.com"
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-# Match article blocks: <article ...> or <h2 class="entry-title"><a href="...">...</a></h2>
-_ARTICLE_RE = re.compile(
-    r'<h[23][^>]*class="[^"]*entry-title[^"]*"[^>]*>\s*'
-    r'<a[^>]*href="([^"]+)"[^>]*>([^<]+)</a>',
-    re.IGNORECASE,
-)
-_DATE_RE = re.compile(
-    r'<time[^>]*datetime="([^"]+)"[^>]*>',
-    re.IGNORECASE,
-)
-_EXCERPT_RE = re.compile(
-    r'<div[^>]*class="[^"]*entry-(?:summary|content|excerpt)[^"]*"[^>]*>(.*?)</div>',
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _strip_html(text: str) -> str:
-    return _HTML_TAG_RE.sub("", text).strip()
 
 
 def _parse_iso_date(date_str: str) -> datetime:
@@ -43,6 +25,7 @@ def _parse_iso_date(date_str: str) -> datetime:
         dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         return dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
     except Exception:
+        logger.warning("aboutlawsuits.unparseable_date", date_str=date_str)
         return datetime.now(tz=timezone.utc)
 
 
@@ -75,37 +58,48 @@ class AboutLawsuitsConnector(BaseConnector):
             if resp.status_code >= 400:
                 raise ConnectorError(f"HTTP {resp.status_code}", self.connector_id)
 
-            html = resp.text
-
-            # Extract article links and titles
-            articles = _ARTICLE_RE.findall(html)
-            dates = _DATE_RE.findall(html)
-            excerpts = _EXCERPT_RE.findall(html)
-
+            soup = BeautifulSoup(resp.text, "html.parser")
             terms_lower = [t.lower() for t in (query.query_terms or [])]
 
-            for i, (link, title) in enumerate(articles):
-                title = title.strip()
-                link = link.strip()
+            for heading in soup.find_all(
+                ["h2", "h3"], class_=re.compile(r"entry-title")
+            ):
+                link_el = heading.find("a", href=True)
+                if not link_el:
+                    continue
+
+                title = link_el.get_text(strip=True)
+                link = link_el["href"]
                 if not link.startswith("http"):
                     link = f"{_BASE_URL}{link}"
 
                 if not title or not link:
                     continue
 
-                # Filter by query terms if provided
                 if terms_lower:
                     if not any(term in title.lower() for term in terms_lower):
                         continue
 
+                # Find date from next sibling context
+                time_el = heading.find_next("time", attrs={"datetime": True})
+
                 published_at = (
-                    _parse_iso_date(dates[i]) if i < len(dates) else datetime.now(tz=timezone.utc)
+                    _parse_iso_date(time_el["datetime"])
+                    if time_el
+                    else datetime.now(tz=timezone.utc)
                 )
                 if watermark and watermark.last_record_date:
                     if published_at <= watermark.last_record_date:
                         continue
 
-                summary = _strip_html(excerpts[i])[:500] if i < len(excerpts) else title
+                # Find excerpt from next sibling div
+                excerpt_el = heading.find_next(
+                    "div",
+                    class_=re.compile(r"entry-summary|entry-content|entry-excerpt"),
+                )
+                summary = (
+                    excerpt_el.get_text(strip=True)[:500] if excerpt_el else title
+                )
 
                 records.append(
                     NormalizedRecord(
