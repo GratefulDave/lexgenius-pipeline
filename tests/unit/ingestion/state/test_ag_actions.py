@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
+import respx
 
 from lexgenius_pipeline.common.models import IngestionQuery
 from lexgenius_pipeline.common.types import HealthStatus, SourceTier, RecordType
@@ -20,6 +22,55 @@ from lexgenius_pipeline.ingestion.state.ag_actions import (
     PennsylvaniaAGConnector,
     TexasAGConnector,
 )
+
+# ── Fixture content ──────────────────────────────────────────────────
+
+SAMPLE_RSS_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Test AG Feed</title>
+    <item>
+      <title>AG Sues Company Over Consumer Protection Violations</title>
+      <link>https://example.gov/news/ag-sues-company</link>
+      <description>The Attorney General filed a consumer protection lawsuit.</description>
+      <pubDate>Mon, 10 Mar 2025 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Office Holiday Schedule</title>
+      <link>https://example.gov/news/holiday</link>
+      <description>The office will be closed for the holiday.</description>
+      <pubDate>Fri, 07 Mar 2025 09:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+SAMPLE_HTML_PAGE = """\
+<html><body>
+<a href="/press-releases/ag-files-environmental-contamination-suit">AG Files Environmental Contamination Suit</a>
+<time datetime="2025-03-10">March 10, 2025</time>
+<p>The Attorney General announced an environmental contamination cleanup action.</p>
+<a href="/press-releases/office-picnic">Office Picnic Announced</a>
+<time datetime="2025-03-08">March 8, 2025</time>
+<p>Staff are invited to the annual office picnic.</p>
+</body></html>
+"""
+
+SAMPLE_NY_HTML = """\
+<html><body>
+<article>
+  <h3><a href="/press-release/2025/ag-james-sues-pharma">AG James Sues Pharmaceutical Company</a></h3>
+  <time datetime="2025-03-10">March 10, 2025</time>
+  <p>Attorney General James filed a lawsuit against a major pharmaceutical company.</p>
+</article>
+<article>
+  <h3><a href="/press-release/2025/office-visits-school">Office Visits Local School</a></h3>
+  <time datetime="2025-03-08">March 8, 2025</time>
+  <p>Staff members visited a local school today.</p>
+</article>
+</body></html>
+"""
 
 
 # ── Expected connector IDs and metadata ─────────────────────────────
@@ -130,7 +181,7 @@ class TestBaseAGActionsConnector:
             assert issubclass(cls, BaseAGActionsConnector)
 
 
-# ── Health check tests ──────────────────────────────────────────────
+# ── Health check tests (mocked) ─────────────────────────────────────
 
 
 class TestHealthCheck:
@@ -138,33 +189,82 @@ class TestHealthCheck:
 
     @pytest.mark.parametrize("cls,expected_id,code,name", PARAMS, ids=IDS)
     @pytest.mark.asyncio
+    @respx.mock
     async def test_health_check_returns_health_status(self, cls, expected_id, code, name) -> None:
+        # Mock all HEAD requests to return 200
+        respx.head(url__regex=r".*").mock(return_value=httpx.Response(200))
         connector = cls()
         result = await connector.health_check()
         assert isinstance(result, HealthStatus)
         assert result in {HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.FAILED}
 
 
-# ── fetch_latest tests ──────────────────────────────────────────────
+# ── fetch_latest tests (mocked) ─────────────────────────────────────
 
 
 class TestFetchLatest:
-    """fetch_latest with an empty query should return a list."""
+    """fetch_latest with mocked HTTP should return a list of records."""
 
-    @pytest.mark.parametrize("cls,expected_id,code,name", PARAMS, ids=IDS)
     @pytest.mark.asyncio
-    async def test_fetch_latest_empty_query(self, cls, expected_id, code, name) -> None:
-        connector = cls()
+    @respx.mock
+    async def test_ca_fetch_latest_rss(self) -> None:
+        """California connector parses RSS and filters by relevance."""
+        respx.get("https://oag.ca.gov/news/feed").mock(
+            return_value=httpx.Response(200, text=SAMPLE_RSS_XML)
+        )
+        connector = CaliforniaAGConnector()
         query = IngestionQuery()
         result = await connector.fetch_latest(query)
         assert isinstance(result, list)
+        # Only the relevant item should pass the keyword filter
+        assert len(result) == 1
+        assert "consumer protection" in result[0].title.lower() or "consumer protection" in result[0].summary.lower()
 
-    @pytest.mark.parametrize("cls,expected_id,code,name", PARAMS, ids=IDS)
     @pytest.mark.asyncio
-    async def test_fetch_latest_with_date_filter(self, cls, expected_id, code, name) -> None:
-        connector = cls()
-        from datetime import datetime, timedelta, timezone
+    @respx.mock
+    async def test_ny_fetch_latest_html(self) -> None:
+        """New York connector parses HTML and filters by relevance."""
+        respx.get(url__regex=r".*ag\.ny\.gov.*").mock(
+            return_value=httpx.Response(200, text=SAMPLE_NY_HTML)
+        )
+        connector = NewYorkAGConnector()
+        query = IngestionQuery()
+        result = await connector.fetch_latest(query)
+        assert isinstance(result, list)
+        # The pharma lawsuit should be relevant; school visit should not
+        assert len(result) == 1
+        assert "pharma" in result[0].summary.lower() or "pharmaceutical" in result[0].summary.lower()
 
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_scrape_connector_empty_on_404(self) -> None:
+        """Scrape-based connectors return empty list on 404 (4xx handled gracefully)."""
+        respx.get(url__regex=r".*").mock(return_value=httpx.Response(404))
+        connector = FloridaAGConnector()
+        query = IngestionQuery()
+        result = await connector.fetch_latest(query)
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_rss_connector_raises_on_404(self) -> None:
+        """RSS-based connectors raise ConnectorError on 404."""
+        from lexgenius_pipeline.common.errors import ConnectorError
+        respx.get(url__regex=r".*").mock(return_value=httpx.Response(404))
+        connector = CaliforniaAGConnector()
+        query = IngestionQuery()
+        with pytest.raises(ConnectorError):
+            await connector.fetch_latest(query)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_fetch_latest_with_date_filter(self) -> None:
+        respx.get(url__regex=r".*").mock(
+            return_value=httpx.Response(200, text=SAMPLE_RSS_XML)
+        )
+        from datetime import datetime, timedelta, timezone
+        connector = CaliforniaAGConnector()
         query = IngestionQuery(
             date_from=datetime.now(tz=timezone.utc) - timedelta(days=30),
             date_to=datetime.now(tz=timezone.utc),

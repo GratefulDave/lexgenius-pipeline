@@ -24,6 +24,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "respx>=0.21",
     "ruff",
 ]
 
