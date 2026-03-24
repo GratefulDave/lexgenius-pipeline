@@ -318,6 +318,8 @@ class BaseAGActionsConnector(BaseStateConnector):
         async with create_http_client() as client:
             try:
                 resp = await client.get(url)
+                if resp.status_code >= 500:
+                    resp.raise_for_status()
                 if resp.status_code >= 400:
                     logger.warning(
                         "ag_actions.fetch_failed",
@@ -326,7 +328,6 @@ class BaseAGActionsConnector(BaseStateConnector):
                         status=resp.status_code,
                     )
                     return ""
-                resp.raise_for_status()
                 return resp.text
             except ConnectorError:
                 raise

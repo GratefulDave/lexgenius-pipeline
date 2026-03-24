@@ -35,7 +35,7 @@ class CaliforniaAGConnector(BaseAGActionsConnector):
         query: IngestionQuery,
         watermark: Watermark | None = None,
     ) -> list[RawPressRelease]:
-        max_items = query.max_records if query.max_records < 100 else 100
+        max_items = min(query.max_records, 100) if query.max_records else 100
         return await self._fetch_rss_feed(self.RSS_FEED_URL, max_items=max_items)
 
     async def health_check(self) -> HealthStatus:
