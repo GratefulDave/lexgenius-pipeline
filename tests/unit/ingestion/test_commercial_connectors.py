@@ -208,10 +208,13 @@ async def test_jdsupra_fetch_parses_rss():
     mock_client.get = AsyncMock(return_value=_make_response(_RSS_XML))
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    connector._client = mock_client
 
-    query = IngestionQuery(query_terms=["drug"])
-    records = await connector.fetch_latest(query)
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.jdsupra_mass_tort.create_http_client",
+        return_value=mock_client,
+    ):
+        query = IngestionQuery(query_terms=["drug"])
+        records = await connector.fetch_latest(query)
 
     assert len(records) == 2
     assert all(isinstance(r, NormalizedRecord) for r in records)
@@ -228,10 +231,13 @@ async def test_national_law_review_fetch_parses_rss():
     mock_client.get = AsyncMock(return_value=_make_response(_RSS_XML))
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    connector._client = mock_client
 
-    query = IngestionQuery(query_terms=["mass tort"])
-    records = await connector.fetch_latest(query)
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.national_law_review.create_http_client",
+        return_value=mock_client,
+    ):
+        query = IngestionQuery(query_terms=["mass tort"])
+        records = await connector.fetch_latest(query)
 
     assert len(records) == 1
     assert records[0].record_type == RecordType.NEWS
@@ -245,10 +251,13 @@ async def test_national_law_review_no_filter_returns_all():
     mock_client.get = AsyncMock(return_value=_make_response(_RSS_XML))
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    connector._client = mock_client
 
-    query = IngestionQuery()
-    records = await connector.fetch_latest(query)
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.national_law_review.create_http_client",
+        return_value=mock_client,
+    ):
+        query = IngestionQuery()
+        records = await connector.fetch_latest(query)
 
     assert len(records) == 2
 
@@ -260,10 +269,13 @@ async def test_ssrn_fetch_parses_rss():
     mock_client.get = AsyncMock(return_value=_make_response(_RSS_XML))
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    connector._client = mock_client
 
-    query = IngestionQuery()
-    records = await connector.fetch_latest(query)
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.ssrn.create_http_client",
+        return_value=mock_client,
+    ):
+        query = IngestionQuery()
+        records = await connector.fetch_latest(query)
 
     assert len(records) == 2
     assert records[0].record_type == RecordType.RESEARCH
@@ -282,7 +294,6 @@ async def test_jdsupra_watermark_filters_old_records():
     mock_client.get = AsyncMock(return_value=_make_response(_RSS_XML))
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    connector._client = mock_client
 
     watermark = Watermark(
         scope_key="test",
@@ -290,8 +301,12 @@ async def test_jdsupra_watermark_filters_old_records():
         last_fetched_at=datetime(2026, 3, 10, 13, 0, 0, tzinfo=timezone.utc),
         last_record_date=datetime(2026, 3, 10, 13, 0, 0, tzinfo=timezone.utc),
     )
-    query = IngestionQuery()
-    records = await connector.fetch_latest(query, watermark=watermark)
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.jdsupra_mass_tort.create_http_client",
+        return_value=mock_client,
+    ):
+        query = IngestionQuery()
+        records = await connector.fetch_latest(query, watermark=watermark)
 
     assert len(records) == 1
     assert "Settlement" in records[0].title
@@ -309,12 +324,15 @@ async def test_jdsupra_http_error_raises():
     mock_client.get = AsyncMock(return_value=_make_response("", status_code=500))
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    connector._client = mock_client
 
     from lexgenius_pipeline.common.errors import ConnectorError
 
-    with pytest.raises(ConnectorError):
-        await connector.fetch_latest(IngestionQuery())
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.jdsupra_mass_tort.create_http_client",
+        return_value=mock_client,
+    ):
+        with pytest.raises(ConnectorError):
+            await connector.fetch_latest(IngestionQuery())
 
 
 @pytest.mark.asyncio
@@ -324,12 +342,15 @@ async def test_jdsupra_invalid_xml_raises():
     mock_client.get = AsyncMock(return_value=_make_response("not xml"))
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    connector._client = mock_client
 
     from lexgenius_pipeline.common.errors import ConnectorError
 
-    with pytest.raises(ConnectorError, match="XML parse error"):
-        await connector.fetch_latest(IngestionQuery())
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.jdsupra_mass_tort.create_http_client",
+        return_value=mock_client,
+    ):
+        with pytest.raises(ConnectorError, match="XML parse error"):
+            await connector.fetch_latest(IngestionQuery())
 
 
 # ---------------------------------------------------------------------------
@@ -708,9 +729,14 @@ async def test_jdsupra_health_check_healthy():
     connector = JDSupraMassTortConnector()
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=_make_response("OK", status_code=200))
-    connector._client = mock_client
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    status = await connector.health_check()
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.jdsupra_mass_tort.create_http_client",
+        return_value=mock_client,
+    ):
+        status = await connector.health_check()
     assert status == HealthStatus.HEALTHY
 
 
@@ -719,9 +745,14 @@ async def test_jdsupra_health_check_failed():
     connector = JDSupraMassTortConnector()
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
-    connector._client = mock_client
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    status = await connector.health_check()
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.jdsupra_mass_tort.create_http_client",
+        return_value=mock_client,
+    ):
+        status = await connector.health_check()
     assert status == HealthStatus.FAILED
 
 
@@ -809,9 +840,12 @@ async def test_jdsupra_fingerprints_are_unique():
     mock_client.get = AsyncMock(return_value=_make_response(_RSS_XML))
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    connector._client = mock_client
 
-    records = await connector.fetch_latest(IngestionQuery())
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.jdsupra_mass_tort.create_http_client",
+        return_value=mock_client,
+    ):
+        records = await connector.fetch_latest(IngestionQuery())
     fingerprints = [r.fingerprint for r in records]
     assert len(fingerprints) == len(set(fingerprints))
 
@@ -853,9 +887,12 @@ async def test_rss_records_have_required_fields():
     mock_client.get = AsyncMock(return_value=_make_response(_RSS_XML))
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    connector._client = mock_client
 
-    records = await connector.fetch_latest(IngestionQuery())
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.jdsupra_mass_tort.create_http_client",
+        return_value=mock_client,
+    ):
+        records = await connector.fetch_latest(IngestionQuery())
 
     for record in records:
         assert record.title
@@ -907,3 +944,97 @@ def test_other_connectors_incremental():
         if cls is GoogleTrendsConnector:
             continue
         assert cls.supports_incremental is True, f"{cls.__name__} should be incremental"
+
+
+# ---------------------------------------------------------------------------
+# Reddit 401 re-auth tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reddit_401_reauth_retries_subreddit():
+    """After a 401, the connector should re-authenticate and retry the same subreddit."""
+    connector = RedditForumsConnector()
+    connector._settings = MagicMock()
+    connector._settings.reddit_client_id = "test_id"
+    connector._settings.reddit_client_secret = "test_secret"
+    connector._access_token = "expired_token"
+
+    auth_response = _make_json_response({"access_token": "new_token"})
+    first_get = _make_json_response({}, status_code=401)
+    second_get = _make_json_response(_REDDIT_RESPONSE)
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=[first_get, second_get])
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    mock_auth_client = AsyncMock()
+    mock_auth_client.post = AsyncMock(return_value=auth_response)
+    mock_auth_client.__aenter__ = AsyncMock(return_value=mock_auth_client)
+    mock_auth_client.__aexit__ = AsyncMock(return_value=False)
+
+    call_count = 0
+    original_create = None
+
+    def _mock_create():
+        nonlocal call_count
+        call_count += 1
+        # First call is from fetch_latest (the data client), second from _authenticate
+        if call_count == 1:
+            return mock_client
+        return mock_auth_client
+
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.reddit_forums.create_http_client",
+        side_effect=_mock_create,
+    ):
+        query = IngestionQuery(query_terms=["drug"])
+        records = await connector.fetch_latest(query)
+
+    # The retry should have fetched posts from the subreddit
+    assert len(records) >= 1
+    assert records[0].record_type == RecordType.NEWS
+
+
+@pytest.mark.asyncio
+async def test_reddit_401_reauth_updates_token():
+    """After re-auth on 401, the connector should store the new token."""
+    connector = RedditForumsConnector()
+    connector._settings = MagicMock()
+    connector._settings.reddit_client_id = "test_id"
+    connector._settings.reddit_client_secret = "test_secret"
+    connector._access_token = "expired_token"
+
+    auth_response = _make_json_response({"access_token": "fresh_token"})
+    # Return 401 on first subreddit, then 200 with data on retry and subsequent
+    first_get = _make_json_response({}, status_code=401)
+    retry_get = _make_json_response(_REDDIT_RESPONSE)
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=[first_get, retry_get])
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    mock_auth_client = AsyncMock()
+    mock_auth_client.post = AsyncMock(return_value=auth_response)
+    mock_auth_client.__aenter__ = AsyncMock(return_value=mock_auth_client)
+    mock_auth_client.__aexit__ = AsyncMock(return_value=False)
+
+    call_count = 0
+
+    def _mock_create():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return mock_client
+        return mock_auth_client
+
+    with patch(
+        "lexgenius_pipeline.ingestion.commercial.reddit_forums.create_http_client",
+        side_effect=_mock_create,
+    ):
+        query = IngestionQuery(query_terms=["drug"])
+        await connector.fetch_latest(query)
+
+    assert connector._access_token == "fresh_token"
