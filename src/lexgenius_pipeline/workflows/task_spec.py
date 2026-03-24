@@ -2,18 +2,17 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TaskSpec(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     key: str
     prompt: str
     context: dict[str, Any] = Field(default_factory=dict)
     output_schema: type[BaseModel] | None = None
     timeout_ms: int = 30000
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class TaskRequest(BaseModel):

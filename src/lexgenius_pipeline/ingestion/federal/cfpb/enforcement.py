@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import re
-from xml.etree import ElementTree as ET
+from defusedxml import ElementTree as ET
 
 import structlog
 

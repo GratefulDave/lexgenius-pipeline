@@ -612,7 +612,7 @@ async def test_google_trends_missing_pytrends_returns_empty():
 
 @pytest.mark.asyncio
 async def test_google_trends_fetch_with_mock():
-    import pandas as pd
+    pd = pytest.importorskip("pandas")
 
     connector = GoogleTrendsConnector()
 
