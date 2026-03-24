@@ -9,15 +9,15 @@ Provides shared logic for:
 
 from __future__ import annotations
 
-import hashlib
 import re
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
-from xml.etree import ElementTree
 
 import structlog
+from defusedxml import ElementTree
 
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
@@ -41,7 +41,6 @@ RELEVANCE_KEYWORDS: list[str] = [
     "sue",
     "sued",
     "complaint",
-    "lawsuit",
     "attorney general",
     "ag sues",
     "ag settles",
@@ -292,8 +291,6 @@ class BaseAGActionsConnector(BaseStateConnector):
             return datetime.now(tz=timezone.utc)
 
         # RFC 2822 (most common RSS format)
-        from email.utils import parsedate_to_datetime
-
         try:
             return parsedate_to_datetime(date_str)
         except (ValueError, TypeError):
