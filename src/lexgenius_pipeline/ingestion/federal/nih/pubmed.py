@@ -5,6 +5,7 @@ from typing import Any
 
 import structlog
 
+from lexgenius_pipeline.common.date_utils import parse_date
 from lexgenius_pipeline.common.errors import ConnectorError
 from lexgenius_pipeline.common.http_client import create_http_client
 from lexgenius_pipeline.common.models import IngestionQuery, NormalizedRecord, Watermark
@@ -20,7 +21,7 @@ _ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 _ESUMMARY_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 
 
-def _parse_date(value: str) -> datetime:
+def parse_date(value: str) -> datetime:
     for fmt in ("%Y %b %d", "%Y %b", "%Y"):
         try:
             return datetime.strptime(value.strip(), fmt).replace(tzinfo=timezone.utc)
@@ -99,7 +100,7 @@ class PubMedConnector(BaseConnector):
             journal: str = article.get("fulljournalname", "")
             author: str = article.get("lastauthor", "")
             date_str: str = article.get("epubdate") or article.get("pubdate", "")
-            published_at = _parse_date(date_str) if date_str else datetime.now(tz=timezone.utc)
+            published_at = parse_date(date_str) if date_str else datetime.now(tz=timezone.utc)
             source_url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
 
             summary_parts = []

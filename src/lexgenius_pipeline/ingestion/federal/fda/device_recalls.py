@@ -5,7 +5,6 @@ Fetches medical device recall data from the OpenFDA device enforcement API.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
 
 import structlog
 

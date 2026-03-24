@@ -7,8 +7,9 @@ federal enforcement actions relevant to mass tort intelligence.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
 from xml.etree import ElementTree as ET
+
+import re
 
 import structlog
 
@@ -110,7 +111,6 @@ class DOJPressReleasesConnector(BaseConnector):
                         continue
 
                 # Strip HTML tags from description
-                import re
                 clean_desc = re.sub(r"<[^>]+>", "", description).strip()
 
                 records.append(
